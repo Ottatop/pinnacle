@@ -21,6 +21,7 @@
 - [ ] Layout system
 - [ ] Server-side decorations
 - [ ] The other stuff Awesome has
+- [ ] XWayland support
 - [x] Is very cool :thumbsup:
 
 ## Info
