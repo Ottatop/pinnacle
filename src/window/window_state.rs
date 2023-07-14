@@ -14,9 +14,9 @@ use smithay::{
     utils::{Logical, Point, Serial, Size},
 };
 
-use crate::tag::{Tag, TagId, TagState};
+use crate::{state::WithState, tag::Tag};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WindowId(u32);
 
 // TODO: this probably doesn't need to be atomic
@@ -36,16 +36,7 @@ pub struct WindowState {
     /// The window's resize state. See [WindowResizeState] for more.
     pub resize_state: WindowResizeState,
     /// What tags the window is currently on.
-    pub tags: Vec<TagId>,
-}
-
-/// Returns a vec of references to all the tags the window is on.
-pub fn tags<'a>(tag_state: &'a TagState, window: &Window) -> Vec<&'a Tag> {
-    tag_state
-        .tags
-        .iter()
-        .filter(|&tag| WindowState::with_state(window, |state| state.tags.contains(&tag.id)))
-        .collect()
+    pub tags: Vec<Tag>,
 }
 
 /// The state of a window's resize operation.
@@ -55,20 +46,20 @@ pub fn tags<'a>(tag_state: &'a TagState, window: &Window) -> Vec<&'a Tag> {
 /// sending a configure event. However, the client will probably not acknowledge the configure
 /// until *after* the window has moved, causing flickering.
 ///
-/// To solve this, we need to create two additional steps: [`WaitingForAck`] and [`WaitingForCommit`].
+/// To solve this, we need to create two additional steps: [`Requested`] and [`Acknowledged`].
 /// If we need to change a window's location when we change its size, instead of
 /// calling `map_element()`, we change the window's [`WindowState`] and set
-/// its [`resize_state`] to `WaitingForAck` with the new position we want.
+/// its [`resize_state`] to `Requested` with the new position we want.
 ///
-/// When the client acks the configure, we can move the state to `WaitingForCommit` in
+/// When the client acks the configure, we can move the state to `Acknowledged` in
 /// [`XdgShellHandler.ack_configure()`]. Finally, in [`CompositorHandler.commit()`], we set the
 /// state back to [`Idle`] and map the window.
 ///
 /// [`space.map_element()`]: smithay::desktop::space::Space#method.map_element
 /// [`with_pending_state()`]: smithay::wayland::shell::xdg::ToplevelSurface#method.with_pending_state
 /// [`Idle`]: WindowResizeState::Idle
-/// [`WaitingForAck`]: WindowResizeState::WaitingForAck
-/// [`WaitingForCommit`]: WindowResizeState::WaitingForCommit
+/// [`Requested`]: WindowResizeState::Requested
+/// [`Acknowledged`]: WindowResizeState::Acknowledged
 /// [`resize_state`]: WindowState#structfield.resize_state
 /// [`XdgShellHandler.ack_configure()`]: smithay::wayland::shell::xdg::XdgShellHandler#method.ack_configure
 /// [`CompositorHandler.commit()`]: smithay::wayland::compositor::CompositorHandler#tymethod.commit
@@ -79,12 +70,12 @@ pub enum WindowResizeState {
     Idle,
     /// The window has received a configure request with a new size. The desired location and the
     /// configure request's serial should be provided here.
-    WaitingForAck(Serial, Point<i32, Logical>),
+    Requested(Serial, Point<i32, Logical>),
     /// The client has received the configure request and has successfully changed its size. It's
     /// now safe to move the window in [`CompositorHandler.commit()`] without flickering.
     ///
     /// [`CompositorHandler.commit()`]: smithay::wayland::compositor::CompositorHandler#tymethod.commit
-    WaitingForCommit(Point<i32, Logical>),
+    Acknowledged(Point<i32, Logical>),
 }
 
 pub enum Float {
@@ -116,20 +107,23 @@ impl WindowState {
     pub fn new() -> Self {
         Default::default()
     }
+}
 
-    /// Access a [Window]'s state, optionally returning something.
-    pub fn with_state<F, T>(window: &Window, mut func: F) -> T
+impl WithState for Window {
+    type State = WindowState;
+
+    fn with_state<F, T>(&self, mut func: F) -> T
     where
-        F: FnMut(&mut Self) -> T,
+        F: FnMut(&mut Self::State) -> T,
     {
-        window
-            .user_data()
-            .insert_if_missing(RefCell::<Self>::default);
+        self.user_data()
+            .insert_if_missing(RefCell::<Self::State>::default);
 
-        let state = window
+        let state = self
             .user_data()
-            .get::<RefCell<Self>>()
-            .expect("This should never happen");
+            .get::<RefCell<Self::State>>()
+            .expect("RefCell not in data map");
+
         func(&mut state.borrow_mut())
     }
 }
